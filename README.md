@@ -4,6 +4,20 @@ Minimal git worktree helper for local CLI workflows.
 
 ## Install
 
+Using `curl | sh` (recommended):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/abuiles/wtadd/main/install.sh | sh
+```
+
+Install a pinned version:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/abuiles/wtadd/main/install.sh | VERSION=v0.1.0 sh
+```
+
+Local install from cloned repo:
+
 ```bash
 sh install.sh
 ```
