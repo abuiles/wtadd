@@ -1,0 +1,276 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage:
+  wt add <name> [start-point]
+  wt rm [name]
+  wt ls
+  wt help
+
+Defaults:
+  start-point defaults to origin/main
+  worktree path is wt-<name>
+EOF
+}
+
+in_git_repo() {
+  git rev-parse --git-dir >/dev/null 2>&1
+}
+
+repo_root() {
+  git rev-parse --show-toplevel
+}
+
+is_tty() {
+  [[ -t 0 || -n "${INSIDE_EMACS:-}" || -n "${EMACS:-}" ]]
+}
+
+list_extra_worktrees() {
+  local root
+  root="$(repo_root)"
+  git worktree list --porcelain \
+    | awk '/^worktree /{print substr($0,10)}' \
+    | grep -v "^${root}$" || true
+}
+
+print_missing_hook_help() {
+  local root="$1"
+  cat <<EOF
+No .worktree-hook found at: ${root}/.worktree-hook
+
+Create one to run setup automatically for each new worktree:
+  cat > .worktree-hook <<'HOOK'
+  #!/usr/bin/env bash
+  set -euo pipefail
+  yarn
+  cp -r ../.wrangler .wrangler/
+  cp ../.dev.vars .
+  HOOK
+  chmod +x .worktree-hook
+EOF
+}
+
+maybe_onboard_hook() {
+  local root="$1"
+  local hook_file="${root}/.worktree-hook"
+
+  if [[ -f "${hook_file}" ]]; then
+    return 0
+  fi
+
+  if is_tty; then
+    printf "No .worktree-hook found. Create one now? [y/N]: "
+    local reply
+    read -r reply || true
+    if [[ "${reply}" == "y" || "${reply}" == "Y" ]]; then
+      {
+        echo "#!/usr/bin/env bash"
+      } > "${hook_file}"
+      chmod +x "${hook_file}" || true
+      echo "Created ${hook_file} (shebang only). Edit it to add your setup commands."
+      echo "Hook status: created-not-run"
+      return 2
+    fi
+  fi
+
+  print_missing_hook_help "${root}"
+  echo "Hook status: missing"
+  return 1
+}
+
+run_hook_if_present() {
+  local root="$1"
+  local wt_path="$2"
+  local hook_file="${root}/.worktree-hook"
+
+  if [[ ! -f "${hook_file}" ]]; then
+    maybe_onboard_hook "${root}" || true
+    return 0
+  fi
+
+  chmod +x "${hook_file}" || true
+  echo "Running .worktree-hook in ${wt_path} ..."
+  (
+    cd "${wt_path}"
+    "${hook_file}"
+  )
+  echo "Hook status: ran"
+}
+
+cmd_add() {
+  if [[ $# -lt 1 ]]; then
+    usage
+    return 1
+  fi
+
+  local name="$1"
+  local start_point="${2:-origin/main}"
+
+  if ! in_git_repo; then
+    echo "Not in a git repository."
+    return 1
+  fi
+
+  local root
+  root="$(repo_root)"
+  local branch="${name}"
+  local wt_path="${root}/wt-${name}"
+  local branch_exists=0
+  if git show-ref --verify --quiet "refs/heads/${branch}"; then
+    branch_exists=1
+  fi
+
+  git fetch -q origin main >/dev/null 2>&1 || true
+
+  if (( branch_exists == 1 )); then
+    if ! git worktree add "${wt_path}" "${branch}"; then
+      echo "Failed to create worktree from existing branch '${branch}'."
+      echo "Check if the path exists or if branch '${branch}' is already checked out in another worktree."
+      return 1
+    fi
+  else
+    if ! git worktree add -b "${branch}" "${wt_path}" "${start_point}"; then
+      echo "Failed to create worktree. Check if branch or path already exists."
+      return 1
+    fi
+  fi
+
+  local env_status="missing"
+  if [[ -f "${root}/.env" ]]; then
+    cp -f "${root}/.env" "${wt_path}/.env"
+    env_status="copied"
+  fi
+
+  if ! run_hook_if_present "${root}" "${wt_path}"; then
+    echo "Hook failed. Worktree was created and left in place: ${wt_path}"
+    return 1
+  fi
+
+  echo "Worktree created: ${wt_path}"
+  echo "Branch: ${branch}"
+  if (( branch_exists == 1 )); then
+    echo "Mode: existing branch"
+  else
+    echo "Start point: ${start_point}"
+  fi
+  echo ".env status: ${env_status}"
+}
+
+select_worktree_interactive() {
+  local items="$1"
+  local selected=""
+  local in_emacs_shell=0
+  if [[ -n "${INSIDE_EMACS:-}" || -n "${EMACS:-}" ]]; then
+    in_emacs_shell=1
+  fi
+
+  if (( in_emacs_shell == 0 )) && command -v fzf >/dev/null 2>&1; then
+    selected="$(printf "%s\n" "${items}" | fzf --height=40% --reverse --prompt="Select worktree: ")"
+    printf "%s" "${selected}"
+    return 0
+  fi
+
+  local i=1
+  local lines=()
+  while IFS= read -r line; do
+    [[ -z "${line}" ]] && continue
+    printf "[%s] %s (%s)\n" "${i}" "$(basename "${line}")" "${line}" >&2
+    lines+=("${line}")
+    ((i++))
+  done <<< "${items}"
+
+  if [[ ${#lines[@]} -eq 0 ]]; then
+    return 1
+  fi
+
+  printf "Select worktree to remove (1-%s): " "${#lines[@]}" >&2
+  local choice
+  read -r choice
+  if ! [[ "${choice}" =~ ^[0-9]+$ ]] || (( choice < 1 || choice > ${#lines[@]} )); then
+    echo "Invalid selection." >&2
+    return 1
+  fi
+
+  printf "%s" "${lines[$((choice-1))]}"
+}
+
+cmd_rm() {
+  if ! in_git_repo; then
+    echo "Not in a git repository."
+    return 1
+  fi
+
+  local target="${1:-}"
+  if [[ -z "${target}" ]]; then
+    local items
+    items="$(list_extra_worktrees)"
+    if [[ -z "${items}" ]]; then
+      echo "No additional worktrees found."
+      return 0
+    fi
+    if ! is_tty; then
+      echo "wt rm without a target requires an interactive terminal."
+      echo "Use: wt rm <worktree-path>"
+      return 1
+    fi
+    echo "Select which worktree to remove:" >&2
+    target="$(select_worktree_interactive "${items}")" || return 1
+  fi
+
+  if [[ -z "${target}" ]]; then
+    echo "No worktree selected."
+    return 1
+  fi
+
+  printf "About to remove worktree: %s\n" "${target}"
+  printf "Are you sure? [y/N]: "
+  local confirm
+  read -r confirm || true
+  if [[ "${confirm}" != "y" && "${confirm}" != "Y" ]]; then
+    echo "Cancelled."
+    return 0
+  fi
+
+  if git worktree remove "${target}" 2>/dev/null; then
+    echo "Removed worktree: ${target}"
+    return 0
+  fi
+
+  echo "Standard removal failed, trying --force ..."
+  if git worktree remove --force "${target}" 2>/dev/null; then
+    echo "Force removed worktree: ${target}"
+    return 0
+  fi
+
+  echo "Failed to remove worktree: ${target}"
+  return 1
+}
+
+cmd_ls() {
+  if ! in_git_repo; then
+    echo "Not in a git repository."
+    return 1
+  fi
+  git worktree list
+}
+
+main() {
+  local sub="${1:-help}"
+  shift || true
+
+  case "${sub}" in
+    add|new) cmd_add "$@" ;;
+    rm) cmd_rm "$@" ;;
+    ls) cmd_ls "$@" ;;
+    help|-h|--help) usage ;;
+    *)
+      echo "Unknown command: ${sub}"
+      usage
+      return 1
+      ;;
+  esac
+}
+
+main "$@"
