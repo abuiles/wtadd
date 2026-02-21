@@ -2,6 +2,12 @@
 
 Minimal git worktree helper for local CLI workflows.
 
+## Rationale
+
+I was tired of repeating setup every time I created a new worktree: rerunning install steps and moving files around.
+
+The `.worktree-hook` flow in `wtadd` simplifies that local workflow by automating setup right after worktree creation.
+
 ## Install
 
 Using `curl | sh` (recommended):
