@@ -1,4 +1,4 @@
-# wt
+# wtadd
 
 Minimal git worktree helper for local CLI workflows.
 
