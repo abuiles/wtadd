@@ -150,14 +150,6 @@ cmd_add() {
     branch_exists=1
   fi
 
-  if [[ -z "${start_point}" ]]; then
-    if ! start_point="$(resolve_default_start_point)"; then
-      echo "Could not determine start-point automatically."
-      echo "Pass one explicitly: wt add <name> <start-point>"
-      return 1
-    fi
-  fi
-
   if (( branch_exists == 1 )); then
     if ! git worktree add "${wt_path}" "${branch}"; then
       echo "Failed to create worktree from existing branch '${branch}'."
@@ -165,6 +157,14 @@ cmd_add() {
       return 1
     fi
   else
+    if [[ -z "${start_point}" ]]; then
+      if ! start_point="$(resolve_default_start_point)"; then
+        echo "Could not determine start-point automatically."
+        echo "Pass one explicitly: wt add <name> <start-point>"
+        return 1
+      fi
+    fi
+
     if ! git worktree add -b "${branch}" "${wt_path}" "${start_point}"; then
       echo "Failed to create worktree. Check if branch or path already exists."
       return 1
