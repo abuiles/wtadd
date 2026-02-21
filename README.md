@@ -50,8 +50,6 @@ You can create a worktree from a branch that already exists locally:
 wt add existing-branch
 ```
 
-In this case, `wt` checks out that existing branch in `wt-existing-branch` and does not need to resolve a default `start-point`.
-
 ## Hook behavior for `wt add`
 
 - If `.worktree-hook` exists in repo root, `wt` runs it inside the new worktree.
