@@ -10,7 +10,7 @@ Usage:
   wt help
 
 Defaults:
-  start-point defaults to origin/main
+  start-point defaults to the repo's default branch (origin/HEAD, upstream, main, master)
   worktree path is wt-<name>
 EOF
 }
@@ -99,6 +99,34 @@ run_hook_if_present() {
   echo "Hook status: ran"
 }
 
+resolve_default_start_point() {
+  local remote_head
+  remote_head="$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+  if [[ -n "${remote_head}" ]] && git show-ref --verify --quiet "refs/remotes/${remote_head}"; then
+    echo "${remote_head}"
+    return 0
+  fi
+
+  local upstream
+  upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"
+  if [[ -n "${upstream}" ]] && git rev-parse --verify --quiet "${upstream}^{commit}" >/dev/null; then
+    echo "${upstream}"
+    return 0
+  fi
+
+  if git show-ref --verify --quiet refs/heads/main; then
+    echo "main"
+    return 0
+  fi
+
+  if git show-ref --verify --quiet refs/heads/master; then
+    echo "master"
+    return 0
+  fi
+
+  return 1
+}
+
 cmd_add() {
   if [[ $# -lt 1 ]]; then
     usage
@@ -106,7 +134,7 @@ cmd_add() {
   fi
 
   local name="$1"
-  local start_point="${2:-origin/main}"
+  local start_point="${2:-}"
 
   if ! in_git_repo; then
     echo "Not in a git repository."
@@ -122,8 +150,6 @@ cmd_add() {
     branch_exists=1
   fi
 
-  git fetch -q origin main >/dev/null 2>&1 || true
-
   if (( branch_exists == 1 )); then
     if ! git worktree add "${wt_path}" "${branch}"; then
       echo "Failed to create worktree from existing branch '${branch}'."
@@ -131,6 +157,14 @@ cmd_add() {
       return 1
     fi
   else
+    if [[ -z "${start_point}" ]]; then
+      if ! start_point="$(resolve_default_start_point)"; then
+        echo "Could not determine start-point automatically."
+        echo "Pass one explicitly: wt add <name> <start-point>"
+        return 1
+      fi
+    fi
+
     if ! git worktree add -b "${branch}" "${wt_path}" "${start_point}"; then
       echo "Failed to create worktree. Check if branch or path already exists."
       return 1

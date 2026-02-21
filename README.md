@@ -37,10 +37,18 @@ wt ls
 ```
 
 Defaults:
-- `start-point` is `origin/main`
+- `start-point` is resolved automatically in this order: `origin/HEAD`, current branch upstream, local `main`, local `master`
 - worktree path is `wt-<name>`
 - branch name defaults to `<name>`
 - if branch `<name>` already exists locally, `wt add` reuses it instead of creating a new one
+
+## Reusing an existing branch with `wt add`
+
+You can create a worktree from a branch that already exists locally:
+
+```bash
+wt add existing-branch
+```
 
 ## Hook behavior for `wt add`
 
